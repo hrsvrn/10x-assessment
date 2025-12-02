@@ -60,7 +60,7 @@ def train(args):
     criterion = CombinedLoss().to(device)
     
     # Mixed Precision
-    scaler = torch.cuda.amp.GradScaler()
+    scaler = torch.amp.GradScaler('cuda')
 
     best_miou = 0.0
 
@@ -76,7 +76,7 @@ def train(args):
             
             optimizer.zero_grad()
             
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast('cuda'):
                 outputs = model(images, prompts)
                 # Ensure outputs match mask shape. 
                 if outputs.shape != masks.shape:

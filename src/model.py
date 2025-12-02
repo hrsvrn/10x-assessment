@@ -15,29 +15,17 @@ seem_path = os.path.join(project_root, "Segment-Everything-Everywhere-All-At-Onc
 if os.path.exists(seem_path) and seem_path not in sys.path:
     sys.path.append(seem_path)
 
+# Hypothetical imports based on SEEM/X-Decoder repository structure
+# Ensure you have run setup_seem.sh and the repo is in the path
 try:
-    # Hypothetical imports based on SEEM/X-Decoder repository structure
     from xdecoder.BaseModel import BaseModel
     from xdecoder import build_model
     from utils.arguments import load_opt_from_config_files
-except ImportError:
-    print("Warning: SEEM/X-Decoder modules not found. Please ensure the repository is installed.")
-    print(f"Checked path: {seem_path}")
-    # Dummy classes for code generation purposes if imports fail
-    class BaseModel(nn.Module):
-        def __init__(self, opt, module=None):
-            super().__init__()
-            self.opt = opt
-            # Add a dummy layer so optimizer has something to optimize
-            self.dummy_layer = nn.Linear(10, 10)
-            
-        def forward(self, batched_inputs, *args, **kwargs):
-            # batched_inputs is a list of dicts
-            batch_size = len(batched_inputs) if isinstance(batched_inputs, list) else 1
-            return {"pred_masks": torch.randn(batch_size, 1, 512, 512).to(self.dummy_layer.weight.device)}
-
-    def build_model(opt):
-        return BaseModel(opt)
+except ImportError as e:
+    print(f"CRITICAL ERROR: Could not import SEEM/X-Decoder modules from {seem_path}")
+    print("Please ensure you have run 'bash setup_seem.sh' and that the repository is correctly cloned.")
+    print(f"Original Error: {e}")
+    raise e
 
     def load_opt_from_config_files(configs):
         return {}
