@@ -11,4 +11,3 @@ matplotlib
 scikit-learn
 roboflow
 python-dotenv
-git+https://github.com/UX-Decoder/Segment-Everything-Everywhere-All-At-Once.git@main
