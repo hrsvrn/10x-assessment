@@ -20,16 +20,19 @@ def train(args):
     os.makedirs(args.checkpoint_dir, exist_ok=True)
 
     # Dataset and Dataloader
+    # Root dir is project root, assuming CSV paths are relative to it
+    root_dir = os.path.dirname(os.path.abspath(__file__))
+    
     train_dataset = DrywallDataset(
-        cracks_root=args.cracks_root,
-        taping_root=args.taping_root,
+        csv_path=args.csv_path,
+        root_dir=root_dir,
         split='train'
     )
     
     val_dataset = DrywallDataset(
-        cracks_root=args.cracks_root,
-        taping_root=args.taping_root,
-        split='valid' # Assuming 'valid' split exists
+        csv_path=args.csv_path,
+        root_dir=root_dir,
+        split='valid'
     )
     
     train_loader = DataLoader(
@@ -76,7 +79,6 @@ def train(args):
             with torch.cuda.amp.autocast():
                 outputs = model(images, prompts)
                 # Ensure outputs match mask shape. 
-                # SEEM might output (B, 1, H, W) or (B, H, W).
                 if outputs.shape != masks.shape:
                     outputs = torch.nn.functional.interpolate(outputs, size=masks.shape[-2:], mode='bilinear', align_corners=False)
                 
@@ -129,13 +131,39 @@ def validate(model, loader, device):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--cracks_root', type=str, required=True, help='Path to Cracks dataset')
-    parser.add_argument('--taping_root', type=str, required=True, help='Path to Drywall-Join-Detect dataset')
+    parser.add_argument('--csv_path', type=str, default='processed_datasets/dataset.csv', help='Path to dataset CSV')
     parser.add_argument('--config_path', type=str, default=None, help='Path to SEEM config')
     parser.add_argument('--epochs', type=int, default=40)
     parser.add_argument('--batch_size', type=int, default=4)
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--checkpoint_dir', type=str, default='checkpoints')
+    parser.add_argument('--all', action='store_true', help='Run full pipeline: download -> process -> train')
     
     args = parser.parse_args()
+
+    if args.all:
+        print("="*60)
+        print("Running Full Pipeline")
+        print("="*60)
+        
+        # 1. Download Data
+        print("\n[Step 1/3] Downloading Data...")
+        try:
+            from download_data import download_datasets
+            download_datasets()
+        except ImportError:
+            print("Error: Could not import download_data.py")
+            exit(1)
+            
+        # 2. Process Data
+        print("\n[Step 2/3] Processing Data...")
+        try:
+            from process_data import main as process_datasets
+            process_datasets()
+        except ImportError:
+            print("Error: Could not import process_data.py")
+            exit(1)
+            
+        print("\n[Step 3/3] Starting Training...")
+
     train(args)

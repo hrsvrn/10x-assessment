@@ -6,15 +6,18 @@ This project implements a text-conditioned segmentation pipeline for drywall qua
 
 ```
 drywall_seem_project/
-├── data/                  # Store datasets here
+├── data/                  # Raw downloaded datasets
+├── processed_datasets/    # Processed binary masks and CSV
 ├── src/
-│   ├── dataset.py         # Dataset loader with augmentations
+│   ├── dataset.py         # Dataset loader (reads from CSV)
 │   ├── losses.py          # Custom CombinedLoss (BCE+Dice+Focal)
 │   ├── model.py           # SEEM Finetuning Wrapper
 │   └── utils.py           # Metrics and helpers
 ├── train.py               # Training script
 ├── predict.py             # Inference script
-├── download_data.py       # Dataset download script
+├── download_data.py       # Dataset download script (Roboflow)
+├── process_data.py        # Data processing script (COCO -> Binary Masks)
+├── setup_seem.sh          # SEEM installation script
 ├── requirements.txt       # Dependencies
 └── report.md              # Project report
 ```
@@ -27,13 +30,11 @@ drywall_seem_project/
    ```
 
 2. **Install SEEM/X-Decoder**:
-   This project relies on the SEEM/X-Decoder codebase. Please clone the official repository and install it:
+   Run the setup script to clone and install the SEEM repository:
    ```bash
-   git clone https://github.com/UX-Decoder/Segment-Everything-Everywhere-All-At-Once.git
-   cd Segment-Everything-Everywhere-All-At-Once
-   pip install -e .
+   bash setup_seem.sh
    ```
-   *Note: Ensure `xdecoder` is importable in your python environment.*
+   **IMPORTANT**: After running the script, you must add the repo to your PYTHONPATH as instructed by the script output.
 
 ## Dataset Preparation
 
@@ -44,20 +45,33 @@ drywall_seem_project/
    ```
 
 2. **Download Datasets**:
-   Run the download script to fetch "Drywall-Join-Detect" and "Cracks" datasets automatically:
+   Run the download script to fetch "Drywall-Join-Detect" and "Cracks" datasets in COCO format:
    ```bash
    python download_data.py
    ```
-   This will download the datasets into the `data/` directory in the correct format.
+
+3. **Process Datasets**:
+   Convert the downloaded COCO annotations to binary masks and generate a CSV index:
+   ```bash
+   python process_data.py
+   ```
+   This will create `processed_datasets/dataset.csv` which is used for training.
+
+## Full Pipeline
+
+To run the entire pipeline (Download -> Process -> Train) in one command:
+
+```bash
+python train.py --all
+```
 
 ## Training
 
-To train the model:
+To train the model manually (assuming data is processed):
 
 ```bash
 python train.py \
-  --cracks_root data/cracks \
-  --taping_root data/drywall_join \
+  --csv_path processed_datasets/dataset.csv \
   --epochs 40 \
   --batch_size 4 \
   --lr 1e-4 \

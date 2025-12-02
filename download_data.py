@@ -16,7 +16,6 @@ def download_datasets():
     rf = Roboflow(api_key=api_key)
     
     # Define project root and data directory
-    # Assuming this script is in the project root
     root_dir = os.path.dirname(os.path.abspath(__file__))
     data_dir = os.path.join(root_dir, "data")
     os.makedirs(data_dir, exist_ok=True)
@@ -42,12 +41,10 @@ def download_datasets():
             project = rf.workspace(ds_info["workspace"]).project(ds_info["project"])
             version = project.version(ds_info["version"])
             
-            # Download as semantic segmentation masks
-            # This format usually provides images and PNG masks
-            dataset = version.download("png-mask-semantic")
+            # Download as COCO JSON format
+            dataset = version.download("coco")
             
             # Move/Rename to our data structure
-            # dataset.location is the path where it downloaded
             source_path = dataset.location
             dest_path = os.path.join(data_dir, ds_info["rename_to"])
             

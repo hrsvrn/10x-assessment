@@ -3,24 +3,26 @@ import cv2
 import random
 import torch
 import numpy as np
+import pandas as pd
 from torch.utils.data import Dataset
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 from PIL import Image
 
 class DrywallDataset(Dataset):
-    def __init__(self, cracks_root, taping_root, transform=None, split='train'):
-        self.cracks_root = cracks_root
-        self.taping_root = taping_root
-        self.transform = transform
+    def __init__(self, csv_path, root_dir, split='train', transform=None):
+        self.root_dir = root_dir
         self.split = split
-        self.samples = []
+        self.transform = transform
         
-        # Load Cracks Dataset
-        self._load_dataset(cracks_root, 'crack')
+        # Load CSV
+        if not os.path.exists(csv_path):
+            raise FileNotFoundError(f"CSV file not found: {csv_path}")
+            
+        df = pd.read_csv(csv_path)
         
-        # Load Taping Dataset
-        self._load_dataset(taping_root, 'taping')
+        # Filter by split
+        self.data = df[df['split'] == split].reset_index(drop=True)
         
         # Define specific augmentations
         self.crack_aug = A.Compose([
@@ -48,87 +50,30 @@ class DrywallDataset(Dataset):
             ToTensorV2()
         ])
 
-    def _load_dataset(self, root, category):
-        if not os.path.exists(root):
-            print(f"Warning: Dataset root {root} does not exist. Skipping.")
-            return
-
-        # Roboflow export structure handling
-        # 1. Check for split folder (train/valid/test)
-        split_dir = os.path.join(root, self.split)
-        if not os.path.exists(split_dir):
-            # Fallback: maybe the root IS the split folder or it's flat
-            split_dir = root
-            
-        # 2. Check for images/masks subdirectories vs flat structure
-        # Roboflow 'png-mask-semantic' often puts everything in the split folder
-        # or uses 'images' and 'masks' folders.
-        
-        img_dir = os.path.join(split_dir, 'images')
-        mask_dir = os.path.join(split_dir, 'masks')
-        
-        flat_structure = False
-        if not os.path.exists(img_dir):
-            # Assume flat structure in split_dir
-            img_dir = split_dir
-            mask_dir = split_dir
-            flat_structure = True
-
-        if not os.path.exists(img_dir):
-             return
-
-        valid_exts = ['.jpg', '.jpeg', '.png']
-        # List all files
-        files = os.listdir(img_dir)
-        
-        for f in files:
-            if any(f.lower().endswith(ext) for ext in valid_exts):
-                # Skip mask files if we are in a flat structure
-                if flat_structure and '_mask' in f:
-                    continue
-                    
-                img_path = os.path.join(img_dir, f)
-                
-                # Determine mask path
-                # Roboflow semantic mask usually: filename_mask.png
-                basename = os.path.splitext(f)[0]
-                mask_name = f"{basename}_mask.png"
-                mask_path = os.path.join(mask_dir, mask_name)
-                
-                if not os.path.exists(mask_path):
-                    # Try exact name if masks are in separate folder with same name
-                    mask_path_alt = os.path.join(mask_dir, f.replace(os.path.splitext(f)[1], '.png'))
-                    if os.path.exists(mask_path_alt):
-                        mask_path = mask_path_alt
-                    else:
-                        # Try just .png extension
-                         mask_path_alt2 = os.path.join(mask_dir, basename + '.png')
-                         if os.path.exists(mask_path_alt2):
-                             mask_path = mask_path_alt2
-                
-                if os.path.exists(mask_path):
-                    self.samples.append({
-                        'image': img_path,
-                        'mask': mask_path,
-                        'category': category,
-                        'id': basename
-                    })
-
     def __len__(self):
-        return len(self.samples)
+        return len(self.data)
 
     def __getitem__(self, idx):
-        sample = self.samples[idx]
-        image = cv2.imread(sample['image'])
+        row = self.data.iloc[idx]
+        
+        # Paths are relative to root_dir
+        img_path = os.path.join(self.root_dir, row['image_path'])
+        mask_path = os.path.join(self.root_dir, row['mask_path'])
+        prompt = row['prompt']
+        
+        # Load Image
+        image = cv2.imread(img_path)
         if image is None:
-             # Handle broken images
+             # Fallback or error
+             print(f"Warning: Could not load image {img_path}")
              return self.__getitem__((idx + 1) % len(self))
              
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        mask = cv2.imread(sample['mask'], cv2.IMREAD_GRAYSCALE)
         
+        # Load Mask
+        mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
         if mask is None:
-             # Handle broken masks
+             print(f"Warning: Could not load mask {mask_path}")
              return self.__getitem__((idx + 1) % len(self))
         
         # Ensure mask is 0 or 1
@@ -136,13 +81,16 @@ class DrywallDataset(Dataset):
         
         original_size = image.shape[:2]
         
-        # Select prompt
-        if sample['category'] == 'crack':
-            prompt = random.choice(["segment crack", "segment wall crack"])
+        # Select transform based on prompt/category
+        if "crack" in prompt:
             transform = self.crack_aug if self.split == 'train' else self.base_transform
+            # Augment prompt synonyms
+            if self.split == 'train':
+                prompt = random.choice(["segment crack", "segment wall crack"])
         else:
-            prompt = random.choice(["segment taping area", "segment drywall seam", "segment joint/tape"])
             transform = self.taping_aug if self.split == 'train' else self.base_transform
+            if self.split == 'train':
+                prompt = random.choice(["segment taping area", "segment drywall seam", "segment joint/tape"])
             
         if transform:
             augmented = transform(image=image, mask=mask)
@@ -160,5 +108,5 @@ class DrywallDataset(Dataset):
             'mask': mask,
             'prompt': prompt,
             'original_size': original_size,
-            'id': sample['id']
+            'id': os.path.splitext(os.path.basename(img_path))[0]
         }
