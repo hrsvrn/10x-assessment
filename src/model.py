@@ -6,6 +6,15 @@ import torch.nn as nn
 # and added it to PYTHONPATH or installed it.
 # We will try to import from a likely package name, but provide instructions in README.
 
+import sys
+import os
+
+# Try to add SEEM to path if not present
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+seem_path = os.path.join(project_root, "Segment-Everything-Everywhere-All-At-Once")
+if os.path.exists(seem_path) and seem_path not in sys.path:
+    sys.path.append(seem_path)
+
 try:
     # Hypothetical imports based on SEEM/X-Decoder repository structure
     from xdecoder.BaseModel import BaseModel
@@ -13,11 +22,15 @@ try:
     from utils.arguments import load_opt_from_config_files
 except ImportError:
     print("Warning: SEEM/X-Decoder modules not found. Please ensure the repository is installed.")
+    print(f"Checked path: {seem_path}")
     # Dummy classes for code generation purposes if imports fail
     class BaseModel(nn.Module):
         def __init__(self, opt, module=None):
             super().__init__()
             self.opt = opt
+            # Add a dummy layer so optimizer has something to optimize
+            self.dummy_layer = nn.Linear(10, 10)
+            
         def forward(self, *args, **kwargs):
             return {"pred_masks": torch.randn(1, 1, 512, 512)}
 
