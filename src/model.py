@@ -31,8 +31,10 @@ except ImportError:
             # Add a dummy layer so optimizer has something to optimize
             self.dummy_layer = nn.Linear(10, 10)
             
-        def forward(self, *args, **kwargs):
-            return {"pred_masks": torch.randn(1, 1, 512, 512)}
+        def forward(self, batched_inputs, *args, **kwargs):
+            # batched_inputs is a list of dicts
+            batch_size = len(batched_inputs) if isinstance(batched_inputs, list) else 1
+            return {"pred_masks": torch.randn(batch_size, 1, 512, 512).to(self.dummy_layer.weight.device)}
 
     def build_model(opt):
         return BaseModel(opt)
