@@ -3,18 +3,19 @@ import torch
 from PIL import Image
 import matplotlib.pyplot as plt
 from transformers import CLIPSegProcessor, CLIPSegForImageSegmentation
-import argparse
+from config import Config
 
-def predict(args):
+def predict():
+    args = Config()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
     # Load model and processor
     # If checkpoint provided, load from there, else load base model
-    if args.checkpoint_path:
-        print(f"Loading model from {args.checkpoint_path}")
-        model = CLIPSegForImageSegmentation.from_pretrained(args.checkpoint_path)
-        processor = CLIPSegProcessor.from_pretrained(args.checkpoint_path)
+    if args.CHECKPOINT_PATH:
+        print(f"Loading model from {args.CHECKPOINT_PATH}")
+        model = CLIPSegForImageSegmentation.from_pretrained(args.CHECKPOINT_PATH)
+        processor = CLIPSegProcessor.from_pretrained(args.CHECKPOINT_PATH)
     else:
         print("Loading base CLIPSeg model")
         model = CLIPSegForImageSegmentation.from_pretrained("CIDAS/clipseg-rd64-refined")
@@ -24,10 +25,10 @@ def predict(args):
     model.eval()
     
     # Load image
-    image = Image.open(args.image_path).convert("RGB")
+    image = Image.open(args.IMAGE_PATH).convert("RGB")
     
     # Process inputs
-    prompts = args.prompts
+    prompts = args.PROMPTS
     inputs = processor(text=prompts, images=[image] * len(prompts), padding="max_length", return_tensors="pt")
     inputs = {k: v.to(device) for k, v in inputs.items()}
     
@@ -56,17 +57,10 @@ def predict(args):
         ax[i+1].set_title(prompt)
         ax[i+1].axis('off')
         
-    os.makedirs(args.output_dir, exist_ok=True)
-    output_path = os.path.join(args.output_dir, "prediction.png")
+    os.makedirs(args.OUTPUT_DIR, exist_ok=True)
+    output_path = os.path.join(args.OUTPUT_DIR, "prediction.png")
     plt.savefig(output_path)
     print(f"Prediction saved to {output_path}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--image_path", type=str, required=True, help="Path to image")
-    parser.add_argument("--prompts", nargs="+", default=["segment crack", "segment taping area"], help="List of prompts")
-    parser.add_argument("--checkpoint_path", type=str, default=None, help="Path to checkpoint directory")
-    parser.add_argument("--output_dir", type=str, default="predictions")
-    args = parser.parse_args()
-    
-    predict(args)
+    predict()

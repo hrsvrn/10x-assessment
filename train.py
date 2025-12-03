@@ -6,7 +6,7 @@ from PIL import Image
 from transformers import CLIPSegProcessor, CLIPSegForImageSegmentation
 from torch.optim import AdamW
 from tqdm import tqdm
-import argparse
+from config import Config
 
 class DrywallDataset(Dataset):
     def __init__(self, csv_path, root_dir, processor, split='train'):
@@ -60,7 +60,8 @@ class DrywallDataset(Dataset):
 
 import numpy as np
 
-def train(args):
+def train():
+    args = Config()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
@@ -72,25 +73,25 @@ def train(args):
     # Create datasets
     root_dir = os.path.dirname(os.path.abspath(__file__))
     # Adjust if csv_path is relative
-    if not os.path.isabs(args.csv_path):
-        csv_path = os.path.join(root_dir, args.csv_path)
+    if not os.path.isabs(args.CSV_PATH):
+        csv_path = os.path.join(root_dir, args.CSV_PATH)
     else:
-        csv_path = args.csv_path
+        csv_path = args.CSV_PATH
         
     train_dataset = DrywallDataset(csv_path, root_dir, processor, split='train')
     valid_dataset = DrywallDataset(csv_path, root_dir, processor, split='valid')
     
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
-    valid_loader = DataLoader(valid_dataset, batch_size=args.batch_size, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=args.BATCH_SIZE, shuffle=True)
+    valid_loader = DataLoader(valid_dataset, batch_size=args.BATCH_SIZE, shuffle=False)
     
-    optimizer = AdamW(model.parameters(), lr=args.lr)
+    optimizer = AdamW(model.parameters(), lr=args.LR)
     
     # Training loop
-    for epoch in range(args.epochs):
+    for epoch in range(args.EPOCHS):
         model.train()
         train_loss = 0.0
         
-        progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.epochs}")
+        progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.EPOCHS}")
         for batch in progress_bar:
             # Move batch to device
             input_ids = batch['input_ids'].to(device)
@@ -142,17 +143,9 @@ def train(args):
         print(f"Epoch {epoch+1} - Avg Val Loss: {avg_val_loss:.4f}")
         
         # Save checkpoint
-        os.makedirs(args.checkpoint_dir, exist_ok=True)
-        model.save_pretrained(os.path.join(args.checkpoint_dir, f"checkpoint-epoch-{epoch+1}"))
-        processor.save_pretrained(os.path.join(args.checkpoint_dir, f"checkpoint-epoch-{epoch+1}"))
+        os.makedirs(args.CHECKPOINT_DIR, exist_ok=True)
+        model.save_pretrained(os.path.join(args.CHECKPOINT_DIR, f"checkpoint-epoch-{epoch+1}"))
+        processor.save_pretrained(os.path.join(args.CHECKPOINT_DIR, f"checkpoint-epoch-{epoch+1}"))
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--csv_path", type=str, default="processed_datasets/dataset.csv")
-    parser.add_argument("--epochs", type=int, default=5)
-    parser.add_argument("--batch_size", type=int, default=4)
-    parser.add_argument("--lr", type=float, default=1e-5)
-    parser.add_argument("--checkpoint_dir", type=str, default="checkpoints")
-    args = parser.parse_args()
-    
-    train(args)
+    train()
