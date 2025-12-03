@@ -60,6 +60,29 @@ class DrywallDataset(Dataset):
 
 import numpy as np
 
+def calculate_metrics(preds, labels, threshold=0.5, epsilon=1e-6):
+    # preds: (B, H, W) logits
+    # labels: (B, H, W) binary mask
+    
+    # Apply sigmoid to get probabilities
+    preds = torch.sigmoid(preds)
+    
+    # Threshold to get binary mask
+    preds = (preds > threshold).float()
+    labels = labels.float()
+    
+    # Flatten spatial dimensions
+    preds = preds.view(preds.shape[0], -1)
+    labels = labels.view(labels.shape[0], -1)
+    
+    intersection = (preds * labels).sum(1)
+    union = preds.sum(1) + labels.sum(1)
+    
+    dice = (2. * intersection) / (union + epsilon)
+    iou = intersection / (union - intersection + epsilon)
+    
+    return dice.mean().item(), iou.mean().item()
+
 def train():
     args = Config()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -123,6 +146,9 @@ def train():
         # Validation
         model.eval()
         val_loss = 0.0
+        val_dice = 0.0
+        val_iou = 0.0
+        
         with torch.no_grad():
             for batch in valid_loader:
                 input_ids = batch['input_ids'].to(device)
@@ -139,8 +165,16 @@ def train():
                 
                 val_loss += outputs.loss.item()
                 
+                # Calculate metrics
+                dice, iou = calculate_metrics(outputs.logits, labels)
+                val_dice += dice
+                val_iou += iou
+                
         avg_val_loss = val_loss / len(valid_loader)
-        print(f"Epoch {epoch+1} - Avg Val Loss: {avg_val_loss:.4f}")
+        avg_val_dice = val_dice / len(valid_loader)
+        avg_val_iou = val_iou / len(valid_loader)
+        
+        print(f"Epoch {epoch+1} - Avg Val Loss: {avg_val_loss:.4f} - Dice: {avg_val_dice:.4f} - IoU: {avg_val_iou:.4f}")
         
         # Save checkpoint
         os.makedirs(args.CHECKPOINT_DIR, exist_ok=True)
