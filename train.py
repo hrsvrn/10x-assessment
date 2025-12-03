@@ -1,169 +1,158 @@
 import os
-import argparse
+import pandas as pd
 import torch
-import torch.optim as optim
-from torch.utils.data import DataLoader
+from torch.utils.data import Dataset, DataLoader
+from PIL import Image
+from transformers import CLIPSegProcessor, CLIPSegForImageSegmentation
+from torch.optim import AdamW
 from tqdm import tqdm
+import argparse
+
+class DrywallDataset(Dataset):
+    def __init__(self, csv_path, root_dir, processor, split='train'):
+        self.df = pd.read_csv(csv_path)
+        self.df = self.df[self.df['split'] == split].reset_index(drop=True)
+        self.root_dir = root_dir
+        self.processor = processor
+
+    def __len__(self):
+        return len(self.df)
+
+    def __getitem__(self, idx):
+        row = self.df.iloc[idx]
+        
+        # Load image
+        img_path = os.path.join(self.root_dir, row['image_path'])
+        image = Image.open(img_path).convert("RGB")
+        
+        # Load mask
+        mask_path = os.path.join(self.root_dir, row['mask_path'])
+        mask = Image.open(mask_path).convert("L")
+        
+        # Get prompt
+        prompt = row['prompt']
+        
+        # Process inputs
+        # CLIPSegProcessor handles resizing and normalization
+        inputs = self.processor(
+            text=[prompt], 
+            images=[image], 
+            padding="max_length", 
+            return_tensors="pt"
+        )
+        
+        # Process target mask
+        # We need to resize mask to match model output or input size?
+        # CLIPSeg output is 352x352 usually. Processor resizes image to 352x352.
+        # We should resize mask to 352x352 to match logits.
+        mask = mask.resize((352, 352), Image.NEAREST)
+        mask_tensor = torch.from_numpy(np.array(mask)).float() / 255.0
+        # mask_tensor shape: (352, 352)
+        
+        # Add mask to inputs (for loss calculation if we were using a trainer, but we do manual loop)
+        inputs['labels'] = mask_tensor
+        
+        # Remove batch dimension added by processor
+        for k, v in inputs.items():
+            inputs[k] = v.squeeze(0)
+            
+        return inputs
+
 import numpy as np
 
-from src.dataset import DrywallDataset
-from src.model import SEEMFinetuner
-from src.losses import CombinedLoss
-from src.utils import compute_metrics
-
 def train(args):
-    # Setup device
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
-
-    # Create directories
-    os.makedirs(args.checkpoint_dir, exist_ok=True)
-
-    # Dataset and Dataloader
-    # Root dir is project root, assuming CSV paths are relative to it
+    
+    # Initialize processor and model
+    processor = CLIPSegProcessor.from_pretrained("CIDAS/clipseg-rd64-refined")
+    model = CLIPSegForImageSegmentation.from_pretrained("CIDAS/clipseg-rd64-refined")
+    model.to(device)
+    
+    # Create datasets
     root_dir = os.path.dirname(os.path.abspath(__file__))
+    # Adjust if csv_path is relative
+    if not os.path.isabs(args.csv_path):
+        csv_path = os.path.join(root_dir, args.csv_path)
+    else:
+        csv_path = args.csv_path
+        
+    train_dataset = DrywallDataset(csv_path, root_dir, processor, split='train')
+    valid_dataset = DrywallDataset(csv_path, root_dir, processor, split='valid')
     
-    train_dataset = DrywallDataset(
-        csv_path=args.csv_path,
-        root_dir=root_dir,
-        split='train'
-    )
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
+    valid_loader = DataLoader(valid_dataset, batch_size=args.batch_size, shuffle=False)
     
-    val_dataset = DrywallDataset(
-        csv_path=args.csv_path,
-        root_dir=root_dir,
-        split='valid'
-    )
+    optimizer = AdamW(model.parameters(), lr=args.lr)
     
-    train_loader = DataLoader(
-        train_dataset, 
-        batch_size=args.batch_size, 
-        shuffle=True, 
-        num_workers=4,
-        pin_memory=True
-    )
-    
-    val_loader = DataLoader(
-        val_dataset, 
-        batch_size=1, # Validate one by one for accurate metrics
-        shuffle=False, 
-        num_workers=2
-    )
-
-    # Model
-    model = SEEMFinetuner(config_path=args.config_path).to(device)
-    
-    # Optimizer
-    optimizer = optim.AdamW(model.parameters(), lr=args.lr)
-    
-    # Loss
-    criterion = CombinedLoss().to(device)
-    
-    # Mixed Precision
-    scaler = torch.amp.GradScaler('cuda')
-
-    best_miou = 0.0
-
+    # Training loop
     for epoch in range(args.epochs):
         model.train()
         train_loss = 0.0
         
-        pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.epochs}")
-        for batch in pbar:
-            images = batch['image'].to(device)
-            masks = batch['mask'].to(device)
-            prompts = batch['prompt']
+        progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.epochs}")
+        for batch in progress_bar:
+            # Move batch to device
+            input_ids = batch['input_ids'].to(device)
+            pixel_values = batch['pixel_values'].to(device)
+            attention_mask = batch['attention_mask'].to(device)
+            labels = batch['labels'].to(device)
             
+            # Forward pass
+            outputs = model(
+                input_ids=input_ids, 
+                pixel_values=pixel_values, 
+                attention_mask=attention_mask,
+                labels=labels
+            )
+            
+            loss = outputs.loss
+            
+            # Backward pass
             optimizer.zero_grad()
-            
-            with torch.amp.autocast('cuda'):
-                outputs = model(images, prompts)
-                # Ensure outputs match mask shape. 
-                if outputs.shape != masks.shape:
-                    outputs = torch.nn.functional.interpolate(outputs, size=masks.shape[-2:], mode='bilinear', align_corners=False)
-                
-                loss = criterion(outputs, masks)
-            
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
+            loss.backward()
+            optimizer.step()
             
             train_loss += loss.item()
-            pbar.set_postfix({'loss': loss.item()})
+            progress_bar.set_postfix({'loss': loss.item()})
             
         avg_train_loss = train_loss / len(train_loader)
         print(f"Epoch {epoch+1} - Avg Train Loss: {avg_train_loss:.4f}")
         
         # Validation
-        val_metrics = validate(model, val_loader, device)
-        print(f"Epoch {epoch+1} - Validation: {val_metrics}")
+        model.eval()
+        val_loss = 0.0
+        with torch.no_grad():
+            for batch in valid_loader:
+                input_ids = batch['input_ids'].to(device)
+                pixel_values = batch['pixel_values'].to(device)
+                attention_mask = batch['attention_mask'].to(device)
+                labels = batch['labels'].to(device)
+                
+                outputs = model(
+                    input_ids=input_ids, 
+                    pixel_values=pixel_values, 
+                    attention_mask=attention_mask,
+                    labels=labels
+                )
+                
+                val_loss += outputs.loss.item()
+                
+        avg_val_loss = val_loss / len(valid_loader)
+        print(f"Epoch {epoch+1} - Avg Val Loss: {avg_val_loss:.4f}")
         
         # Save checkpoint
-        if val_metrics['iou'] > best_miou:
-            best_miou = val_metrics['iou']
-            torch.save(model.state_dict(), os.path.join(args.checkpoint_dir, 'best_model.pth'))
-            print("Saved best model.")
-            
-        # Save last
-        torch.save(model.state_dict(), os.path.join(args.checkpoint_dir, 'last_model.pth'))
+        os.makedirs(args.checkpoint_dir, exist_ok=True)
+        model.save_pretrained(os.path.join(args.checkpoint_dir, f"checkpoint-epoch-{epoch+1}"))
+        processor.save_pretrained(os.path.join(args.checkpoint_dir, f"checkpoint-epoch-{epoch+1}"))
 
-def validate(model, loader, device):
-    model.eval()
-    metrics = {'iou': [], 'dice': [], 'pixel_acc': []}
-    
-    with torch.no_grad():
-        for batch in tqdm(loader, desc="Validating"):
-            images = batch['image'].to(device)
-            masks = batch['mask'].to(device)
-            prompts = batch['prompt']
-            
-            outputs = model(images, prompts)
-            
-            if outputs.shape != masks.shape:
-                outputs = torch.nn.functional.interpolate(outputs, size=masks.shape[-2:], mode='bilinear', align_corners=False)
-            
-            batch_metrics = compute_metrics(outputs, masks)
-            for k, v in batch_metrics.items():
-                metrics[k].append(v)
-                
-    avg_metrics = {k: np.mean(v) for k, v in metrics.items()}
-    return avg_metrics
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--csv_path', type=str, default='processed_datasets/dataset.csv', help='Path to dataset CSV')
-    parser.add_argument('--config_path', type=str, default=None, help='Path to SEEM config')
-    parser.add_argument('--epochs', type=int, default=40)
-    parser.add_argument('--batch_size', type=int, default=4)
-    parser.add_argument('--lr', type=float, default=1e-4)
-    parser.add_argument('--checkpoint_dir', type=str, default='checkpoints')
-    parser.add_argument('--all', action='store_true', help='Run full pipeline: download -> process -> train')
-    
+    parser.add_argument("--csv_path", type=str, default="processed_datasets/dataset.csv")
+    parser.add_argument("--epochs", type=int, default=5)
+    parser.add_argument("--batch_size", type=int, default=4)
+    parser.add_argument("--lr", type=float, default=1e-5)
+    parser.add_argument("--checkpoint_dir", type=str, default="checkpoints")
     args = parser.parse_args()
-
-    if args.all:
-        print("="*60)
-        print("Running Full Pipeline")
-        print("="*60)
-        
-        # 1. Download Data
-        print("\n[Step 1/3] Downloading Data...")
-        try:
-            from download_data import download_datasets
-            download_datasets()
-        except ImportError:
-            print("Error: Could not import download_data.py")
-            exit(1)
-            
-        # 2. Process Data
-        print("\n[Step 2/3] Processing Data...")
-        try:
-            from process_data import main as process_datasets
-            process_datasets()
-        except ImportError:
-            print("Error: Could not import process_data.py")
-            exit(1)
-            
-        print("\n[Step 3/3] Starting Training...")
-
+    
     train(args)

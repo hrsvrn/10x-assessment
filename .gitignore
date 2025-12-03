@@ -12,6 +12,7 @@ env/
 data/
 checkpoints/
 predictions/
+processed_datasets/
 
 # IDE
 .vscode/

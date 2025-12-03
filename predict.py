@@ -1,68 +1,72 @@
-import argparse
 import os
-import cv2
 import torch
-import numpy as np
 from PIL import Image
-import albumentations as A
-from albumentations.pytorch import ToTensorV2
-
-from src.model import SEEMFinetuner
-from src.utils import postprocess_mask
+import matplotlib.pyplot as plt
+from transformers import CLIPSegProcessor, CLIPSegForImageSegmentation
+import argparse
 
 def predict(args):
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
     
-    # Load Model
-    model = SEEMFinetuner(config_path=args.config_path)
-    model.load_state_dict(torch.load(args.checkpoint, map_location=device))
+    # Load model and processor
+    # If checkpoint provided, load from there, else load base model
+    if args.checkpoint_path:
+        print(f"Loading model from {args.checkpoint_path}")
+        model = CLIPSegForImageSegmentation.from_pretrained(args.checkpoint_path)
+        processor = CLIPSegProcessor.from_pretrained(args.checkpoint_path)
+    else:
+        print("Loading base CLIPSeg model")
+        model = CLIPSegForImageSegmentation.from_pretrained("CIDAS/clipseg-rd64-refined")
+        processor = CLIPSegProcessor.from_pretrained("CIDAS/clipseg-rd64-refined")
+        
     model.to(device)
     model.eval()
     
-    # Preprocessing
-    transform = A.Compose([
-        A.Resize(512, 512),
-        A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
-        ToTensorV2()
-    ])
+    # Load image
+    image = Image.open(args.image_path).convert("RGB")
     
-    # Load Image
-    image_bgr = cv2.imread(args.image_path)
-    if image_bgr is None:
-        raise ValueError(f"Could not load image from {args.image_path}")
-        
-    image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-    original_size = image_rgb.shape[:2] # H, W
-    
-    augmented = transform(image=image_rgb)
-    input_tensor = augmented['image'].unsqueeze(0).to(device)
+    # Process inputs
+    prompts = args.prompts
+    inputs = processor(text=prompts, images=[image] * len(prompts), padding="max_length", return_tensors="pt")
+    inputs = {k: v.to(device) for k, v in inputs.items()}
     
     # Inference
     with torch.no_grad():
-        output = model(input_tensor, [args.prompt])
-        # Output is logits (1, 1, 512, 512) or similar
+        outputs = model(**inputs)
         
-    # Postprocess
-    mask = postprocess_mask(output, original_size)
+    preds = outputs.logits.unsqueeze(1)
     
-    # Save
-    filename = os.path.basename(args.image_path)
-    file_id = os.path.splitext(filename)[0]
-    prompt_slug = args.prompt.replace(" ", "_")
-    save_name = f"{file_id}__{prompt_slug}.png"
-    save_path = os.path.join(args.output_dir, save_name)
+    # Visualize
+    fig, ax = plt.subplots(1, len(prompts) + 1, figsize=(15, 5))
+    ax[0].imshow(image)
+    ax[0].set_title("Original Image")
+    ax[0].axis('off')
     
+    for i, prompt in enumerate(prompts):
+        # Resize prediction to image size
+        pred = torch.sigmoid(preds[i][0])
+        pred = pred.cpu().numpy()
+        
+        # Resize to original image size for visualization
+        # Note: CLIPSeg outputs 352x352. We might want to resize back to original.
+        # For visualization, we can just show the output.
+        
+        ax[i+1].imshow(pred, cmap='viridis')
+        ax[i+1].set_title(prompt)
+        ax[i+1].axis('off')
+        
     os.makedirs(args.output_dir, exist_ok=True)
-    cv2.imwrite(save_path, mask)
-    print(f"Saved mask to {save_path}")
+    output_path = os.path.join(args.output_dir, "prediction.png")
+    plt.savefig(output_path)
+    print(f"Prediction saved to {output_path}")
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--image_path', type=str, required=True, help='Path to input image')
-    parser.add_argument('--prompt', type=str, required=True, help='Text prompt')
-    parser.add_argument('--checkpoint', type=str, required=True, help='Path to trained model checkpoint')
-    parser.add_argument('--config_path', type=str, default=None, help='Path to SEEM config')
-    parser.add_argument('--output_dir', type=str, default='predictions')
-    
+    parser.add_argument("--image_path", type=str, required=True, help="Path to image")
+    parser.add_argument("--prompts", nargs="+", default=["segment crack", "segment taping area"], help="List of prompts")
+    parser.add_argument("--checkpoint_path", type=str, default=None, help="Path to checkpoint directory")
+    parser.add_argument("--output_dir", type=str, default="predictions")
     args = parser.parse_args()
+    
     predict(args)
